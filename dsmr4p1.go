@@ -36,49 +36,23 @@ var (
 	ErrorParseValueWithUnit = errors.New("parsing string that should contain both a value and a unit")
 )
 
-// ParseTimestamp parses the timestamp format used in the dutch smartmeters. Do
-// note this function assumes the CET/CEST timezone.
-func ParseTimestamp(timestamp string) (time.Time, error) {
-	// The format for the timestamp is:
-	// YYMMDDhhmmssX
-	// The value used for X determines whether DST is active.
-	// S (summer?) means yes, W (winter?) means no.
-
-	var timezone string
-	switch timestamp[len(timestamp)-1] {
-	case 'S':
-		timezone = summerTimezone
-	case 'W':
-		timezone = winterTimezone
-	default:
-		return time.Time{}, ErrorParseTimestamp
-	}
-
-	// To make sure parsing is always consistent and indepentent of the the local
-	// timezone of the host this code is running on, let's for now assume Dutch
-	// time.
-	loc, err := time.LoadLocation("Europe/Amsterdam")
-
-	timestamp = timestamp[:len(timestamp)-1] + " " + timezone
-	ts, err := time.ParseInLocation("060102150405 MST", timestamp, loc)
-	if err != nil {
-		return ts, err
-	}
-	return ts, nil
-}
-
-// ParseValueWithUnit parses the provided string into a float and a unit. If the
+// parseValue parses the provided string into a float and a unit. If the
 // unit starts with "k" the value is multiplied by 1000 and the "k" is removed
 // from the unit.
-func ParseValueWithUnit(input string) (value float64, unit string, err error) {
+func parseValue(input string) (value float64, unit string, err error) {
 	parts := strings.Split(input, "*")
-	if len(parts) != 2 {
+	if len(parts) == 1 {
+		// No unit? check if it numeric, it could be a count of some sort
+		value, err = strconv.ParseFloat(input, 64)
+		return
+	} else if len(parts) > 2 {
 		err = ErrorParseValueWithUnit
 		return
-	}
-	value, err = strconv.ParseFloat(parts[0], 64)
-	if err != nil {
-		return
+	} else {
+		value, err = strconv.ParseFloat(parts[0], 64)
+		if err != nil {
+			return
+		}
 	}
 	unit = parts[1]
 	if strings.HasPrefix(unit, "k") {
@@ -130,12 +104,12 @@ func startPolling(input io.Reader, ch chan Telegram) {
 		computedCRC := fmt.Sprintf("%04X", calcChecksum(data))
 
 		if dataCRC == computedCRC {
-			t := Telegram{data: data}
-			err := t.parse()
+			t, err := parseTelegram(data)
 			if err != nil {
 				log.Printf("telegram parsing error: %v\n", err)
+				continue
 			}
-			ch <- t
+			ch <- *t
 		} else {
 			log.Printf("CRC values do not match: %s vs %s\n", dataCRC, computedCRC)
 		}
